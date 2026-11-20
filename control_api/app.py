@@ -1,8 +1,7 @@
 import hmac
 import json
 import os
-import tempfile
-from pathlib import Path
+import httpx
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -12,7 +11,10 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="YTPro Control API", version="0.2.0")
 security = HTTPBasic()
-CONFIG_PATH = Path(os.getenv("CONFIG_FILE", "/var/data/ytpro_config.json"))
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_TABLE = "ytpro_config"
+SUPABASE_TIMEOUT = 8.0
 
 DEFAULTS: dict[str, Any] = {
     "app_enabled": True,
@@ -45,9 +47,20 @@ def admin_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     return credentials.username
 
 
+def supabase_headers() -> dict[str, str]:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError(
+            "Falta configurar SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en las variables de entorno de Render."
+        )
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
 def load_config() -> dict[str, Any]:
     config = DEFAULTS.copy()
-    # Environment variables provide the initial values on first startup.
     env_map = {
         "APP_ENABLED": ("app_enabled", bool),
         "MAINTENANCE_MODE": ("maintenance_mode", bool),
@@ -68,28 +81,45 @@ def load_config() -> dict[str, Any]:
                     config[key] = kind(raw)
                 except (TypeError, ValueError):
                     pass
-    try:
-        if CONFIG_PATH.exists():
-            saved = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            if isinstance(saved, dict):
-                config.update({k: v for k, v in saved.items() if k in DEFAULTS})
-    except (OSError, json.JSONDecodeError):
-        pass
+
+    # La base de datos es la fuente persistente; las variables de entorno
+    # solo proporcionan valores iniciales si todavía no existe una fila.
+    if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            response = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}",
+                params={"id": "eq.1", "select": "config"},
+                headers=supabase_headers(),
+                timeout=SUPABASE_TIMEOUT,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if rows and isinstance(rows[0].get("config"), dict):
+                config.update({k: v for k, v in rows[0]["config"].items() if k in DEFAULTS})
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            # La ruta de estado sigue respondiendo con valores seguros por defecto.
+            pass
     return config
 
 
 def save_config(config: dict[str, Any]) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix="ytpro-", suffix=".json", dir=str(CONFIG_PATH.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(config, file, ensure_ascii=False, indent=2)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temp_name, CONFIG_PATH)
-    finally:
-        if os.path.exists(temp_name):
-            os.unlink(temp_name)
+        response = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}",
+            params={"on_conflict": "id"},
+            headers={
+                **supabase_headers(),
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json={"id": 1, "config": config},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        response.raise_for_status()
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise RuntimeError(
+            "No se pudo guardar en Supabase. Verifica las variables SUPABASE_URL y "
+            "SUPABASE_SERVICE_ROLE_KEY, y que exista la tabla ytpro_config."
+        ) from exc
 
 
 class AdminConfig(BaseModel):
@@ -170,11 +200,8 @@ def put_admin_config(payload: AdminConfig, _: str = Depends(admin_auth)):
     config = payload.model_dump()
     try:
         save_config(config)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=507,
-            detail="No se pudo guardar. Comprueba que el disco persistente de Render esté montado en /var/data.",
-        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True, "message": "Configuración guardada", "config": config}
 
 
