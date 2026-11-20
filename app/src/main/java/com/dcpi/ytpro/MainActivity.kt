@@ -32,6 +32,10 @@ import coil.compose.AsyncImage
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.lifecycleScope
+import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.ffmpeg.FFmpeg
@@ -55,6 +59,10 @@ class MainActivity : ComponentActivity() {
         try {
             YoutubeDL.getInstance().init(application)
             FFmpeg.getInstance().init(application)
+            lifecycleScope.launch(Dispatchers.IO) {
+                try { YoutubeDL.getInstance().updateYoutubeDL(this@MainActivity, UpdateChannel._NIGHTLY) }
+                catch (e: Exception) { Log.w("YTPro", "No se pudo actualizar yt-dlp", e) }
+            }
         } catch (e: Exception) {
             Log.e("YTPro", "No se pudo iniciar yt-dlp/FFmpeg", e)
         }
@@ -88,12 +96,15 @@ private suspend fun checkGate(): Gate = withContext(Dispatchers.IO) {
     }
 }
 
-private suspend fun searchTracks(query: String): List<Track> = withContext(Dispatchers.IO) {
-    val request = YoutubeDLRequest("ytsearch10:$query")
+private suspend fun searchTracks(query: String, start: Int = 1, pageSize: Int = 20): List<Track> = withContext(Dispatchers.IO) {
+    val request = YoutubeDLRequest("ytsearch" + (start + pageSize - 1) + ":" + query)
     request.addOption("--dump-single-json")
     request.addOption("--flat-playlist")
     request.addOption("--skip-download")
     request.addOption("--no-warnings")
+    request.addOption("--playlist-start", start.toString())
+    request.addOption("--playlist-end", (start + pageSize - 1).toString())
+    request.addOption("--no-update")
     val output = YoutubeDL.getInstance().execute(request).out
     val root = JSONObject(output)
     val entries = root.optJSONArray("entries") ?: return@withContext emptyList()
@@ -123,12 +134,12 @@ private suspend fun searchTracks(query: String): List<Track> = withContext(Dispa
 private suspend fun getAudioStream(track: Track): String = withContext(Dispatchers.IO) {
     val request = YoutubeDLRequest(track.url)
     request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
-    request.addOption("-g")
+    request.addOption("-f", "bestaudio/best")
     request.addOption("--no-warnings")
-    YoutubeDL.getInstance().execute(request).out.lineSequence()
-        .map { it.trim() }
-        .firstOrNull { it.startsWith("https://") }
-        ?: error("No se encontró un flujo de audio reproducible.")
+    request.addOption("--no-update")
+    val info = YoutubeDL.getInstance().getInfo(request)
+    info.url?.takeIf { it.startsWith("https://") }
+        ?: error("YouTube no entregó un enlace de audio válido. Prueba otro resultado.")
 }
 
 private suspend fun downloadAudio(context: android.content.Context, track: Track): Uri = withContext(Dispatchers.IO) {
@@ -139,6 +150,7 @@ private suspend fun downloadAudio(context: android.content.Context, track: Track
     request.addOption("--audio-format", "mp3")
     request.addOption("--audio-quality", "0")
     request.addOption("--no-playlist")
+    request.addOption("--no-update")
     request.addOption("-o", File(base, "%(title).180B.%(ext)s").absolutePath)
     YoutubeDL.getInstance().execute(request)
     val output = base.listFiles()
