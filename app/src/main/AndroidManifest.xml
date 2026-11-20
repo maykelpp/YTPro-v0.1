@@ -3,6 +3,7 @@
     <application
         android:allowBackup="false"
         android:label="YTPro"
+        android:icon="@drawable/ic_ytpro"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
         <activity
