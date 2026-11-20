@@ -131,7 +131,7 @@ private suspend fun getAudioStream(track: Track): String = withContext(Dispatche
 }
 
 private suspend fun downloadAudio(context: android.content.Context, track: Track): Uri = withContext(Dispatchers.IO) {
-    val base = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "YTPro")
+    val base = File(File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "YTPro"), track.id)
     if (!base.exists() && !base.mkdirs()) error("No se pudo preparar el almacenamiento de YTPro.")
     val request = YoutubeDLRequest(track.url)
     request.addOption("-x")
@@ -148,6 +148,7 @@ private suspend fun downloadAudio(context: android.content.Context, track: Track
     val values = ContentValues().apply {
         put(MediaStore.Audio.Media.DISPLAY_NAME, output.name)
         put(MediaStore.Audio.Media.TITLE, output.nameWithoutExtension)
+        put(MediaStore.Audio.Media.ARTIST, track.channel)
         put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
         put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/YTPro")
         put(MediaStore.Audio.Media.IS_PENDING, 1)
