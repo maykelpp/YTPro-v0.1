@@ -14,6 +14,19 @@ app.add_middleware(
 def env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
+@app.get("/")
+def root():
+    return {
+        "service": "YTPro Control API",
+        "status": "online",
+        "message": "La API está funcionando.",
+        "endpoints": {
+            "health": "/health",
+            "app_status": "/v1/status?versionCode=1",
+            "docs": "/docs",
+            "openapi": "/openapi.json",
+        },
+    }
 @app.get("/health")
 def health():
     return {"ok": True, "service": "ytpro-control-api"}
