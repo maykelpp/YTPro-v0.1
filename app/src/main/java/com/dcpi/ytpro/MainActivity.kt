@@ -1,6 +1,9 @@
 package com.dcpi.ytpro
 
 import android.os.Bundle
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.net.Uri
 import android.os.Environment
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -127,12 +130,9 @@ private suspend fun getAudioStream(track: Track): String = withContext(Dispatche
         ?: error("No se encontró un flujo de audio reproducible.")
 }
 
-private suspend fun downloadAudio(track: Track): File = withContext(Dispatchers.IO) {
-    val base = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-        "YTPro"
-    )
-    if (!base.exists() && !base.mkdirs()) error("No se pudo crear la carpeta Música/YTPro.")
+private suspend fun downloadAudio(context: android.content.Context, track: Track): Uri = withContext(Dispatchers.IO) {
+    val base = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "YTPro")
+    if (!base.exists() && !base.mkdirs()) error("No se pudo preparar el almacenamiento de YTPro.")
     val request = YoutubeDLRequest(track.url)
     request.addOption("-x")
     request.addOption("--audio-format", "mp3")
@@ -140,7 +140,34 @@ private suspend fun downloadAudio(track: Track): File = withContext(Dispatchers.
     request.addOption("--no-playlist")
     request.addOption("-o", File(base, "%(title).180B.%(ext)s").absolutePath)
     YoutubeDL.getInstance().execute(request)
-    base
+    val output = base.listFiles()
+        ?.filter { it.isFile && it.extension.equals("mp3", true) }
+        ?.maxByOrNull { it.lastModified() }
+        ?: error("yt-dlp terminó, pero no se encontró el MP3 generado.")
+
+    val values = ContentValues().apply {
+        put(MediaStore.Audio.Media.DISPLAY_NAME, output.name)
+        put(MediaStore.Audio.Media.TITLE, output.nameWithoutExtension)
+        put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
+        put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/YTPro")
+        put(MediaStore.Audio.Media.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("Android no permitió guardar el audio en Música/YTPro.")
+    try {
+        resolver.openOutputStream(uri)?.use { destination ->
+            output.inputStream().use { source -> source.copyTo(destination) }
+        } ?: error("No se pudo escribir el archivo en la biblioteca.")
+        values.clear()
+        values.put(MediaStore.Audio.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        output.delete()
+        uri
+    } catch (e: Exception) {
+        resolver.delete(uri, null, null)
+        throw e
+    }
 }
 
 private fun formatDuration(seconds: Long): String {
@@ -270,7 +297,7 @@ private fun HomeScreen() {
                         busy = true
                         message = "Descargando audio a Música/YTPro…"
                         scope.launch {
-                            try { downloadAudio(track); message = "Descarga completada en Música/YTPro." }
+                            try { downloadAudio(context, track); message = "Descarga completada en Música/YTPro." }
                             catch (e: Exception) { message = "Error de descarga: ${e.message ?: "inténtalo de nuevo"}" }
                             finally { busy = false }
                         }
