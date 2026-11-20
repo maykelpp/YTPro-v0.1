@@ -1,6 +1,8 @@
 package com.dcpi.ytpro
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import android.content.ContentValues
 import android.provider.MediaStore
 import android.net.Uri
@@ -214,9 +216,12 @@ private fun GateScreen(gate: Gate, retry: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text(gate.message, color = Color.LightGray)
         Spacer(Modifier.height(24.dp))
-        Button(onClick = retry, colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
-            Text("Volver a comprobar")
+        if (gate.state == "update_required" && gate.updateUrl.isNotBlank()) {
+            val context = LocalContext.current
+            Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(gate.updateUrl))) }, colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("Actualizar YTPro") }
+            Spacer(Modifier.height(8.dp))
         }
+        OutlinedButton(onClick = retry) { Text("Volver a comprobar") }
     }
 }
 
