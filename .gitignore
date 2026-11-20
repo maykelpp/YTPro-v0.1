@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+.env
+.venv/
+__pycache__/
