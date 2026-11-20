@@ -1,12 +1,15 @@
 package com.dcpi.ytpro
 
 import android.os.Bundle
+import android.os.Environment
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -17,13 +20,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.ffmpeg.FFmpeg
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 private val Ink = Color(0xFF09090D)
 private val Panel = Color(0xFF17171F)
@@ -33,11 +48,25 @@ private val Red = Color(0xFFFF3048)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            YoutubeDL.getInstance().init(application)
+            FFmpeg.getInstance().init(application)
+        } catch (e: Exception) {
+            Log.e("YTPro", "No se pudo iniciar yt-dlp/FFmpeg", e)
+        }
         setContent { YTProApp() }
     }
 }
 
 private data class Gate(val allowed: Boolean, val state: String, val message: String, val updateUrl: String = "")
+private data class Track(
+    val id: String,
+    val title: String,
+    val channel: String,
+    val thumbnail: String,
+    val duration: Long,
+    val url: String
+)
 
 private suspend fun checkGate(): Gate = withContext(Dispatchers.IO) {
     try {
@@ -55,25 +84,85 @@ private suspend fun checkGate(): Gate = withContext(Dispatchers.IO) {
     }
 }
 
+private suspend fun searchTracks(query: String): List<Track> = withContext(Dispatchers.IO) {
+    val request = YoutubeDLRequest("ytsearch10:$query")
+    request.addOption("--dump-single-json")
+    request.addOption("--flat-playlist")
+    request.addOption("--skip-download")
+    request.addOption("--no-warnings")
+    val output = YoutubeDL.getInstance().execute(request).out
+    val root = JSONObject(output)
+    val entries = root.optJSONArray("entries") ?: return@withContext emptyList()
+    buildList {
+        for (i in 0 until entries.length()) {
+            val item = entries.optJSONObject(i) ?: continue
+            val id = item.optString("id")
+            if (id.isBlank() || id == "null") continue
+            val thumb = item.optString("thumbnail").ifBlank {
+                "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+            }
+            add(
+                Track(
+                    id = id,
+                    title = item.optString("title", "Sin título"),
+                    channel = item.optString("channel").ifBlank { item.optString("uploader", "YouTube") },
+                    thumbnail = thumb,
+                    duration = item.optLong("duration", 0L),
+                    url = item.optString("url").takeIf { it.startsWith("http") }
+                        ?: "https://www.youtube.com/watch?v=$id"
+                )
+            )
+        }
+    }
+}
+
+private suspend fun getAudioStream(track: Track): String = withContext(Dispatchers.IO) {
+    val request = YoutubeDLRequest(track.url)
+    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+    request.addOption("-g")
+    request.addOption("--no-warnings")
+    YoutubeDL.getInstance().execute(request).out.lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.startsWith("https://") }
+        ?: error("No se encontró un flujo de audio reproducible.")
+}
+
+private suspend fun downloadAudio(track: Track): File = withContext(Dispatchers.IO) {
+    val base = File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+        "YTPro"
+    )
+    if (!base.exists() && !base.mkdirs()) error("No se pudo crear la carpeta Música/YTPro.")
+    val request = YoutubeDLRequest(track.url)
+    request.addOption("-x")
+    request.addOption("--audio-format", "mp3")
+    request.addOption("--audio-quality", "0")
+    request.addOption("--no-playlist")
+    request.addOption("-o", File(base, "%(title).180B.%(ext)s").absolutePath)
+    YoutubeDL.getInstance().execute(request)
+    base
+}
+
+private fun formatDuration(seconds: Long): String {
+    if (seconds <= 0) return ""
+    val mins = seconds / 60
+    val secs = seconds % 60
+    return String.format(Locale.getDefault(), "%d:%02d", mins, secs)
+}
+
 @Composable
 private fun YTProApp() {
     var gate by remember { mutableStateOf<Gate?>(null) }
     var retry by remember { mutableIntStateOf(0) }
-
     LaunchedEffect(retry) { gate = checkGate() }
-
-    MaterialTheme(colorScheme = darkColorScheme(
-        background = Ink, surface = Panel, primary = Pink, secondary = Red
-    )) {
+    MaterialTheme(colorScheme = darkColorScheme(background = Ink, surface = Panel, primary = Pink, secondary = Red)) {
         val current = gate
-        if (current == null) {
-            Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.Center) {
+        when {
+            current == null -> Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Pink)
             }
-        } else if (!current.allowed) {
-            GateScreen(current) { retry++ }
-        } else {
-            HomeScreen()
+            !current.allowed -> GateScreen(current) { retry++ }
+            else -> HomeScreen()
         }
     }
 }
@@ -81,24 +170,19 @@ private fun YTProApp() {
 @Composable
 private fun GateScreen(gate: Gate, retry: () -> Unit) {
     Column(
-        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF210D20), Ink)))
-            .padding(28.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF210D20), Ink))).padding(28.dp),
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(Icons.Default.MusicNote, null, tint = Pink, modifier = Modifier.size(64.dp))
         Spacer(Modifier.height(18.dp))
         Text("YTPro", fontSize = 34.sp, fontWeight = FontWeight.Black, color = Color.White)
         Spacer(Modifier.height(14.dp))
-        Text(
-            when (gate.state) {
-                "maintenance" -> "MANTENIMIENTO"
-                "update_required" -> "ACTUALIZACIÓN OBLIGATORIA"
-                "disabled" -> "APLICACIÓN DESACTIVADA"
-                else -> "VERIFICACIÓN NECESARIA"
-            },
-            color = Pink, fontWeight = FontWeight.Bold
-        )
+        Text(when (gate.state) {
+            "maintenance" -> "MANTENIMIENTO"
+            "update_required" -> "ACTUALIZACIÓN OBLIGATORIA"
+            "disabled" -> "APLICACIÓN DESACTIVADA"
+            else -> "VERIFICACIÓN NECESARIA"
+        }, color = Pink, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         Text(gate.message, color = Color.LightGray)
         Spacer(Modifier.height(24.dp))
@@ -110,13 +194,21 @@ private fun GateScreen(gate: Gate, retry: () -> Unit) {
 
 @Composable
 private fun HomeScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val player = remember { ExoPlayer.Builder(context).build() }
     var query by remember { mutableStateOf("") }
+    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var current by remember { mutableStateOf<Track?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Busca música o pega un enlace de contenido que tengas permiso de guardar.") }
     var selected by remember { mutableStateOf("Inicio") }
+
+    DisposableEffect(player) { onDispose { player.release() } }
+
     Column(Modifier.fillMaxSize().background(Ink)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("YT", color = Red, fontSize = 27.sp, fontWeight = FontWeight.Black)
             Text("Pro", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.weight(1f))
@@ -125,52 +217,111 @@ private fun HomeScreen() {
         OutlinedTextField(
             value = query, onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            placeholder = { Text("Buscar canciones, artistas o álbumes") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            singleLine = true,
+            placeholder = { Text("Buscar canciones, artistas o pegar enlace") },
+            leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true,
             shape = RoundedCornerShape(28.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Pink, unfocusedBorderColor = Panel,
                 focusedTextColor = Color.White, unfocusedTextColor = Color.White
             )
         )
-        Row(Modifier.padding(horizontal = 18.dp, vertical = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf("Para ti", "Música", "Podcasts").forEach { label ->
-                FilterChip(selected = selected == label, onClick = { selected = label }, label = { Text(label) })
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = {
+                    if (query.isBlank() || busy) return@Button
+                    busy = true
+                    message = "Buscando con yt-dlp…"
+                    scope.launch {
+                        try { tracks = searchTracks(query.trim()); message = if (tracks.isEmpty()) "No se encontraron resultados." else "${tracks.size} resultados" }
+                        catch (e: Exception) { message = "Error de búsqueda: ${e.message ?: "inténtalo de nuevo"}" }
+                        finally { busy = false }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Pink),
+                enabled = !busy
+            ) { Icon(Icons.Default.Search, null); Spacer(Modifier.width(6.dp)); Text("Buscar") }
+            OutlinedButton(onClick = { tracks = emptyList(); message = "Lista limpia." }, enabled = !busy) { Text("Limpiar") }
+            if (busy) CircularProgressIndicator(Modifier.size(22.dp), color = Pink, strokeWidth = 2.dp)
+        }
+        Text(message, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            items(tracks, key = { it.id }) { track ->
+                TrackRow(
+                    track = track,
+                    onPreview = {
+                        if (busy) return@TrackRow
+                        busy = true
+                        message = "Preparando vista previa…"
+                        scope.launch {
+                            try {
+                                val stream = getAudioStream(track)
+                                player.setMediaItem(MediaItem.fromUri(stream))
+                                player.prepare()
+                                player.play()
+                                current = track
+                                isPlaying = true
+                                message = "Reproduciendo vista previa"
+                            } catch (e: Exception) { message = "No se pudo reproducir: ${e.message ?: "flujo no disponible"}" }
+                            finally { busy = false }
+                        }
+                    },
+                    onDownload = {
+                        if (busy) return@TrackRow
+                        busy = true
+                        message = "Descargando audio a Música/YTPro…"
+                        scope.launch {
+                            try { downloadAudio(track); message = "Descarga completada en Música/YTPro." }
+                            catch (e: Exception) { message = "Error de descarga: ${e.message ?: "inténtalo de nuevo"}" }
+                            finally { busy = false }
+                        }
+                    }
+                )
             }
         }
-        LazyColumn(Modifier.weight(1f).padding(horizontal = 18.dp)) {
-            item {
-                Text("Tu música, sin esperas", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text("YTPro v0.1 · búsqueda y vista previa", color = Color.Gray)
-                Spacer(Modifier.height(18.dp))
-                Box(
-                    Modifier.fillMaxWidth().height(174.dp)
-                        .background(Brush.linearGradient(listOf(Color(0xFF6B102E), Color(0xFF21102D), Panel)), RoundedCornerShape(22.dp))
-                        .padding(20.dp),
-                    contentAlignment = Alignment.BottomStart
-                ) {
-                    Column {
-                        Text("ESCUCHA ANTES DE DESCARGAR", color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Vista previa rápida por streaming", color = Color.LightGray, fontSize = 13.sp)
-                    }
+        current?.let { track ->
+            Row(
+                Modifier.fillMaxWidth().background(Panel).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AsyncImage(track.thumbnail, null, modifier = Modifier.size(48.dp))
+                Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                    Text(track.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(track.channel, color = Color.Gray, fontSize = 12.sp)
                 }
-                Spacer(Modifier.height(24.dp))
-                Text("Tu biblioteca", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text("Aquí aparecerán tus canciones descargadas.", color = Color.Gray)
-                Spacer(Modifier.height(90.dp))
+                IconButton(onClick = {
+                    if (player.isPlaying) { player.pause(); isPlaying = false }
+                    else { player.play(); isPlaying = true }
+                }) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Pink) }
             }
         }
         NavigationBar(containerColor = Panel) {
             listOf("Inicio", "Explorar", "Biblioteca").forEachIndexed { index, label ->
                 NavigationBarItem(
-                    selected = selected == label,
-                    onClick = { selected = label },
+                    selected = selected == label, onClick = { selected = label },
                     icon = { Icon(listOf(Icons.Default.Home, Icons.Default.Explore, Icons.Default.LibraryMusic)[index], null) },
                     label = { Text(label) }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackRow(track: Track, onPreview: () -> Unit, onDownload: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 7.dp).background(Panel, RoundedCornerShape(14.dp)).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AsyncImage(track.thumbnail, null, modifier = Modifier.size(64.dp).background(Color.DarkGray, RoundedCornerShape(9.dp)))
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(track.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                listOf(track.channel, formatDuration(track.duration)).filter { it.isNotBlank() }.joinToString(" · "),
+                color = Color.Gray, fontSize = 11.sp, maxLines = 1
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onPreview) { Icon(Icons.Default.PlayArrow, null); Text("Escuchar") }
+                TextButton(onClick = onDownload) { Icon(Icons.Default.Download, null); Text("Descargar") }
             }
         }
     }
