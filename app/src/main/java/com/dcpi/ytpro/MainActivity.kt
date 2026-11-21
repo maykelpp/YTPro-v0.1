@@ -59,6 +59,7 @@ import com.dcpi.ytpro.playback.LrcParser
 import com.dcpi.ytpro.playback.LyricLine
 import com.dcpi.ytpro.playback.TransitionController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 private val Ink = Color(0xFF09090D)
 private val Panel = Color(0xFF17171F)
