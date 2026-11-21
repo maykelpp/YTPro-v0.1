@@ -31,3 +31,16 @@ Rutas públicas:
 - `/docs`: documentación técnica de la API.
 
 El panel usa autenticación HTTP Basic sobre HTTPS. No compartas las credenciales y no habilites CORS público para operaciones administrativas.
+
+
+## Módulos musicales añadidos (rama de desarrollo)
+Se está preparando una ampliación inspirada en funciones observadas en el análisis estático de Mornye, con implementación original:
+- Biblioteca local mediante MediaStore y listas locales.
+- Pantalla de efectos de audio Android (Equalizer, BassBoost y LoudnessEnhancer cuando el dispositivo los admite).
+- Parser de letras LRC.
+- Cola serial de descargas.
+- Edición de metadatos de archivos accesibles.
+- Transiciones fade entre pistas.
+- Servicio Media3 MediaSession como base para reproducción en segundo plano.
+
+Consulta [docs/MORNYE_FEATURE_MAPPING.md](docs/MORNYE_FEATURE_MAPPING.md) para distinguir lo implementado de lo que todavía requiere integración o pruebas.
