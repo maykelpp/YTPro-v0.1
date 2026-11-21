@@ -16,11 +16,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -255,6 +257,11 @@ private fun HomeScreen() {
     var query by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var previewStreams by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var activeQuery by remember { mutableStateOf("") }
+    var nextStart by remember { mutableIntStateOf(1) }
+    var pageLoading by remember { mutableStateOf(false) }
+    var hasMore by remember { mutableStateOf(true) }
+    val resultsListState = rememberLazyListState()
     var current by remember { mutableStateOf<Track?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var audioSessionId by remember { mutableIntStateOf(0) }
@@ -280,6 +287,53 @@ private fun HomeScreen() {
 
     DisposableEffect(player) { onDispose { player.release() } }
 
+    fun loadSearch(term: String, reset: Boolean) {
+        if (term.isBlank() || busy || pageLoading) return
+        val start = if (reset) 1 else nextStart
+        if (reset) {
+            busy = true
+            tracks = emptyList()
+            activeQuery = term
+            nextStart = 1
+            hasMore = true
+            message = "Buscando resultados…"
+        } else {
+            pageLoading = true
+        }
+        scope.launch {
+            try {
+                val found = searchTracks(term, start, 20)
+                tracks = if (reset) found else (tracks + found).distinctBy { it.id }
+                nextStart = start + found.size
+                hasMore = found.size == 20
+                activeQuery = term
+                message = if (tracks.isEmpty()) "No se encontraron resultados." else "${tracks.size} resultados"
+            } catch (e: Exception) {
+                message = "Error de búsqueda: ${e.message ?: "inténtalo de nuevo"}"
+            } finally {
+                if (reset) busy = false else pageLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(selected, query) {
+        if (selected == "Para ti") {
+            val feedQuery = query.trim().ifBlank { "música popular en español" }
+            if (activeQuery != feedQuery) loadSearch(feedQuery, true)
+        }
+    }
+
+    LaunchedEffect(selected, tracks.size, pageLoading, hasMore, activeQuery) {
+        if (selected != "Resultados" && selected != "Para ti") return@LaunchedEffect
+        snapshotFlow { resultsListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .collect { lastVisible ->
+                val total = resultsListState.layoutInfo.totalItemsCount
+                if (total > 0 && lastVisible >= total - 4 && hasMore && !pageLoading && !busy && activeQuery.isNotBlank()) {
+                    loadSearch(activeQuery, false)
+                }
+            }
+    }
+
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("YT", color = Red, fontSize = 27.sp, fontWeight = FontWeight.Black)
@@ -302,27 +356,9 @@ private fun HomeScreen() {
             Button(
                 onClick = {
                     if (query.isBlank() || busy) return@Button
-                    busy = true
-                    message = "Buscando con yt-dlp…"
-                    scope.launch {
-                        try {
-                            val found = searchTracks(query.trim())
-                            tracks = found
-                            previewStreams = emptyMap()
-                            message = if (found.isEmpty()) "No se encontraron resultados." else "${found.size} resultados · preparando vistas previas"
-                            // Preparar enlaces en segundo plano para acelerar el toque en Escuchar.
-                            scope.launch {
-                                found.take(8).forEach { candidate ->
-                                    if (previewStreams[candidate.id] == null) {
-                                        val resolved = runCatching { getAudioStream(candidate) }.getOrNull()
-                                        if (resolved != null) previewStreams = previewStreams + (candidate.id to resolved)
-                                    }
-                                }
-                            }
-                        }
-                        catch (e: Exception) { message = "Error de búsqueda: ${e.message ?: "inténtalo de nuevo"}" }
-                        finally { busy = false }
-                    }
+                    previewStreams = emptyMap()
+                    selected = "Resultados"
+                    loadSearch(query.trim(), true)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Pink),
                 enabled = !busy
@@ -372,34 +408,54 @@ private fun HomeScreen() {
                 }
                 item { TextButton(onClick = { downloadQueue.removeFinished() }) { Text("Limpiar terminadas") } }
             }
-            else -> LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-                items(tracks, key = { it.id }) { track ->
-                    TrackRow(
-                        track = track,
-                        onPreview = {
-                            if (busy) return@TrackRow
-                            busy = true
-                            message = "Preparando vista previa…"
-                            scope.launch {
-                                try {
-                                    val stream = previewStreams[track.id] ?: withTimeout(2000L) { getAudioStream(track) }
-                                    TransitionController(player).playWithFade(stream)
-                                    audioSessionId = player.audioSessionId
-                                    current = track
-                                    isPlaying = true
-                                    message = "Reproduciendo vista previa"
-                                } catch (e: Exception) { message = "No se pudo reproducir: ${e.message ?: "flujo no disponible"}" }
-                                finally { busy = false }
+            "Inicio" -> Column(Modifier.weight(1f).fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.MusicNote, null, tint = Pink, modifier = Modifier.size(54.dp))
+                Text("Descubre música", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Busca una canción o entra en Para ti para explorar recomendaciones.", color = Color.Gray)
+                Spacer(Modifier.height(14.dp))
+                Button(onClick = { selected = "Para ti" }, colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("Abrir Para ti") }
+            }
+            "Resultados", "Para ti" -> Column(Modifier.weight(1f)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (selected == "Para ti") "Para ti" else "Resultados", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+                    Text("${tracks.size} canciones", color = Color.Gray, fontSize = 11.sp)
+                }
+                LazyColumn(state = resultsListState, modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
+                    items(tracks, key = { it.id }) { track ->
+                        TrackRow(
+                            track = track,
+                            onPreview = {
+                                if (busy) return@TrackRow
+                                busy = true
+                                message = "Conectando con la vista previa…"
+                                scope.launch {
+                                    try {
+                                        val stream = previewStreams[track.id] ?: getAudioStream(track)
+                                        player.setMediaItem(MediaItem.fromUri(stream))
+                                        player.prepare()
+                                        player.playWhenReady = true
+                                        audioSessionId = player.audioSessionId
+                                        current = track
+                                        isPlaying = true
+                                        message = "Vista previa solicitada: cargando audio…"
+                                    } catch (e: Exception) {
+                                        message = "No se pudo iniciar la vista previa: ${e.message ?: "vuelve a intentarlo"}"
+                                    } finally { busy = false }
+                                }
+                            },
+                            onDownload = {
+                                downloadQueue.enqueue(track.title, track.url, track.id)
+                                message = "Añadido a la cola de descargas."
+                                selected = "Descargas"
                             }
-                        },
-                        onDownload = {
-                            downloadQueue.enqueue(track.title, track.url, track.id)
-                            message = "Añadido a la cola de descargas."
-                            selected = "Descargas"
-                        }
-                    )
+                        )
+                    }
+                    if (pageLoading) item { Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Pink) } }
+                    if (!hasMore && tracks.isNotEmpty()) item { Text("No hay más resultados.", color = Color.Gray, modifier = Modifier.fillMaxWidth().padding(16.dp)) }
                 }
             }
+            else -> Unit
         }
         current?.let { track ->
             Row(
@@ -418,10 +474,10 @@ private fun HomeScreen() {
             }
         }
         NavigationBar(containerColor = Panel) {
-            listOf("Inicio", "Biblioteca", "Audio", "Letras", "Descargas").forEachIndexed { index, label ->
+            listOf("Inicio", "Para ti", "Biblioteca", "Audio", "Letras", "Descargas").forEachIndexed { index, label ->
                 NavigationBarItem(
                     selected = selected == label, onClick = { selected = label },
-                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Lyrics, Icons.Default.Download)[index], null) },
+                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.Explore, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Lyrics, Icons.Default.Download)[index], null) },
                     label = { Text(label) }
                 )
             }
