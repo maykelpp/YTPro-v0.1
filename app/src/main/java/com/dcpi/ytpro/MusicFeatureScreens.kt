@@ -113,10 +113,18 @@ fun AudioEffectsScreen(audioSessionId: Int) {
         Slider(value = loudness, onValueChange = { loudness = it; effects?.setLoudness((it * 1200).toInt()) }, valueRange = 0f..1f, enabled = enabled && effects != null)
         Text("Bandas del ecualizador: ${effects?.bandCount ?: 0}")
         if (effects == null) Text("Este dispositivo no expuso los efectos de audio solicitados.")
-        else repeat(effects.bandCount) { band ->
-            var level by remember(audioSessionId, band) { mutableFloatStateOf(0f) }
-            Text("Banda ${band + 1}: ${level.toInt()} dB")
-            Slider(value = level, onValueChange = { level = it; effects.setBand(band, it.toInt()) }, valueRange = -1500f..1500f, enabled = enabled)
+        else {
+            val bandRange = effects.bandRange()
+            repeat(effects.bandCount) { band ->
+                var level by remember(audioSessionId, band) { mutableFloatStateOf(0f) }
+                Text("Banda ${band + 1}: ${level.toInt()} mB")
+                Slider(
+                    value = level.coerceIn(bandRange.first.toFloat(), bandRange.last.toFloat()),
+                    onValueChange = { level = it; effects.setBand(band, it.toInt()) },
+                    valueRange = bandRange.first.toFloat()..bandRange.last.toFloat(),
+                    enabled = enabled
+                )
+            }
         }
         Text("Los efectos dependen del hardware y del motor de audio de Android.", style = MaterialTheme.typography.bodySmall)
     }
