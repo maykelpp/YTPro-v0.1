@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application
         android:allowBackup="false"
         android:extractNativeLibs="true"
@@ -8,6 +12,14 @@
         android:icon="@drawable/ic_ytpro"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false">
+        <service
+            android:name=".playback.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
         <activity
             android:name=".MainActivity"
             android:exported="true">
