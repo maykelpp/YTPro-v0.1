@@ -27,7 +27,7 @@ import com.dcpi.ytpro.playback.AudioEffectsController
 import java.util.UUID
 
 @Composable
-fun LocalLibraryScreen(onPlay: (LocalTrack) -> Unit) {
+fun LocalLibraryScreen(modifier: Modifier = Modifier, onPlay: (LocalTrack) -> Unit) {
     val context = LocalContext.current
     var tracks by remember { mutableStateOf<List<LocalTrack>>(emptyList()) }
     var playlists by remember { mutableStateOf(PlaylistStore(context).all()) }
@@ -42,7 +42,7 @@ fun LocalLibraryScreen(onPlay: (LocalTrack) -> Unit) {
     }
     val hasPermission = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier.fillMaxWidth().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Biblioteca local", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
@@ -88,9 +88,9 @@ fun LocalLibraryScreen(onPlay: (LocalTrack) -> Unit) {
 }
 
 @Composable
-fun AudioEffectsScreen(audioSessionId: Int) {
+fun AudioEffectsScreen(audioSessionId: Int, modifier: Modifier = Modifier) {
     if (audioSessionId <= 0) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Box(modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Reproduce una canción primero para activar los efectos de audio.")
         }
         return
@@ -100,7 +100,7 @@ fun AudioEffectsScreen(audioSessionId: Int) {
     var enabled by remember(audioSessionId) { mutableStateOf(true) }
     var bass by remember(audioSessionId) { mutableFloatStateOf(0f) }
     var loudness by remember(audioSessionId) { mutableFloatStateOf(0f) }
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
+    Column(modifier.fillMaxWidth().padding(20.dp)) {
         Text("Audio y ecualizador", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Efectos activos")
