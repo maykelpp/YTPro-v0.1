@@ -3,7 +3,7 @@ package com.dcpi.ytpro.playback
 data class LyricLine(val timeMs: Long, val text: String)
 
 object LrcParser {
-    private val timestamp = Regex("\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\]")
+    private val timestamp = Regex("\\[(\\d+):(\\d{2})(?:[.:](\\d{1,3}))?\\]")
 
     fun parse(source: String): List<LyricLine> = source.lineSequence().flatMap { rawLine ->
         val line = rawLine.trim()
