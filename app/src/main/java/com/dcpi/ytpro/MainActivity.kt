@@ -49,6 +49,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import com.dcpi.ytpro.library.LocalTrack
+import com.dcpi.ytpro.downloads.DownloadQueueManager
+import com.dcpi.ytpro.downloads.DownloadStatus
 
 private val Ink = Color(0xFF09090D)
 private val Panel = Color(0xFF17171F)
@@ -243,6 +245,8 @@ private fun HomeScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val player = remember { ExoPlayer.Builder(context).build() }
+    val downloadQueue = remember(context) { DownloadQueueManager { task -> downloadAudio(context, Track(task.contentId, task.title, "YTPro", "", 0L, task.source)) } }
+    val downloadTasks by downloadQueue.tasks.collectAsState()
     var query by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var previewStreams by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -325,6 +329,13 @@ private fun HomeScreen() {
                 message = "Reproduciendo desde la biblioteca local"
             }
             "Audio" -> AudioEffectsScreen(audioSessionId)
+            "Descargas" -> LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                item { Text("Cola de descargas", color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(12.dp)) }
+                items(downloadTasks, key = { it.id }) { task ->
+                    ListItem(headlineContent = { Text(task.title, color = Color.White, maxLines = 1) }, supportingContent = { Text(task.message.ifBlank { task.status.name }, color = Color.Gray) }, leadingContent = { Icon(Icons.Default.Download, contentDescription = null, tint = Pink) }, trailingContent = { Text(task.status.name, color = if (task.status == DownloadStatus.FAILED) Red else Pink, fontSize = 10.sp) })
+                }
+                item { TextButton(onClick = { downloadQueue.removeFinished() }) { Text("Limpiar terminadas") } }
+            }
             else -> LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                 items(tracks, key = { it.id }) { track ->
                     TrackRow(
@@ -348,14 +359,9 @@ private fun HomeScreen() {
                             }
                         },
                         onDownload = {
-                            if (busy) return@TrackRow
-                            busy = true
-                            message = "Descargando audio a Música/YTPro…"
-                            scope.launch {
-                                try { downloadAudio(context, track); message = "Descarga completada en Música/YTPro." }
-                                catch (e: Exception) { message = "Error de descarga: ${e.message ?: "inténtalo de nuevo"}" }
-                                finally { busy = false }
-                            }
+                            downloadQueue.enqueue(track.title, track.url, track.id)
+                            message = "Añadido a la cola de descargas."
+                            selected = "Descargas"
                         }
                     )
                 }
@@ -378,10 +384,10 @@ private fun HomeScreen() {
             }
         }
         NavigationBar(containerColor = Panel) {
-            listOf("Inicio", "Biblioteca", "Audio").forEachIndexed { index, label ->
+            listOf("Inicio", "Biblioteca", "Audio", "Descargas").forEachIndexed { index, label ->
                 NavigationBarItem(
                     selected = selected == label, onClick = { selected = label },
-                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq)[index], null) },
+                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Download)[index], null) },
                     label = { Text(label) }
                 )
             }
