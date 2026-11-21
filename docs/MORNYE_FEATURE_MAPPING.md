@@ -4,7 +4,7 @@ Este documento diferencia lo que está conectado a la aplicación, lo que existe
 
 ## Funciones conectadas a la interfaz
 
-- Biblioteca local: permiso de lectura, exploración MediaStore, listado y reproducción de archivos locales.
+- Biblioteca local: permiso de lectura, exploración MediaStore, listado y reproducción de archivos locales. La reproducción usa transición fade de salida/entrada al cambiar de pista.
 - Listas locales: creación y persistencia básica de una lista con las pistas escaneadas.
 - Efectos de audio: pantalla de ecualizador, graves y ganancia; el soporte real depende de AudioFX y del dispositivo.
 - Cola de descargas: añadir canciones, procesarlas secuencialmente, mostrar estado y mensaje de error, limpiar tareas terminadas.
@@ -14,7 +14,6 @@ Este documento diferencia lo que está conectado a la aplicación, lo que existe
 ## Módulos que aún no están conectados a la interfaz principal
 
 - Editor de metadatos MediaStore: módulo disponible, falta flujo de edición y autorización de escritura.
-- Transición fade: módulo disponible, falta integrarlo en los controles del reproductor.
 - MediaSessionService: servicio declarado, pero el ExoPlayer de la pantalla principal todavía no está conectado a esa sesión.
 - Cola e historial persistentes: los estados de la cola viven en memoria; no hay historial durable ni porcentaje de progreso.
 
