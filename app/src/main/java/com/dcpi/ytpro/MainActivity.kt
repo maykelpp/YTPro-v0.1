@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import com.dcpi.ytpro.playback.PlaybackPlayerHolder
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.compose.ui.window.Dialog
@@ -252,7 +254,8 @@ private fun GateScreen(gate: Gate, retry: () -> Unit) {
 private fun HomeScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val player = remember { ExoPlayer.Builder(context).build() }
+    val player = remember { PlaybackPlayerHolder.get(context) }
+    LaunchedEffect(player) { context.startService(Intent(context, com.dcpi.ytpro.playback.PlaybackService::class.java)) }
     val downloadQueue = remember(context) { DownloadQueueManager { task -> downloadAudio(context, Track(task.contentId, task.title, "YTPro", "", 0L, task.source)) } }
     val downloadTasks by downloadQueue.tasks.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -269,6 +272,7 @@ private fun HomeScreen() {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Busca música o pega un enlace de contenido que tengas permiso de guardar.") }
     var selected by remember { mutableStateOf("Inicio") }
+    var playerPanelTab by remember { mutableStateOf("Letras") }
     var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricIndex by remember { mutableIntStateOf(-1) }
     val lyricPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -279,14 +283,14 @@ private fun HomeScreen() {
             message = if (lyrics.isEmpty()) "El archivo no contiene letras LRC válidas." else "Letras cargadas: " + lyrics.size + " líneas."
         }
     }
-    LaunchedEffect(player, current, isPlaying, selected, lyrics) {
-        while (isPlaying && selected == "Letras") {
+    LaunchedEffect(player, current, isPlaying, selected, playerPanelTab, lyrics) {
+        while (isPlaying && selected == "Reproductor" && playerPanelTab == "Letras") {
             lyricIndex = LrcParser.activeIndex(lyrics, player.currentPosition)
             delay(150L)
         }
     }
 
-    DisposableEffect(player) { onDispose { player.release() } }
+    // El reproductor pertenece al servicio multimedia compartido; la pantalla no lo libera.
 
     fun loadSearch(term: String, reset: Boolean) {
         if (term.isBlank() || busy || pageLoading) return
@@ -369,7 +373,7 @@ private fun HomeScreen() {
         }
         Text(message, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         when (selected) {
-            "Biblioteca" -> LocalLibraryScreen { localTrack ->
+            "Biblioteca" -> LocalLibraryScreen(Modifier.weight(1f)) { localTrack ->
                 val item = Track(
                     id = localTrack.uri,
                     title = localTrack.title,
@@ -389,15 +393,31 @@ private fun HomeScreen() {
                         .onFailure { message = "No se pudo reproducir el archivo: ${it.message ?: "error de audio"}" }
                 }
             }
-            "Audio" -> AudioEffectsScreen(audioSessionId)
-            "Letras" -> Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
-                Button(onClick = { lyricPicker.launch(arrayOf("text/plain", "application/octet-stream")) }) { Text("Abrir archivo .LRC") }
-                if (lyrics.isEmpty()) {
-                    Text("Carga un archivo LRC para ver las letras sincronizadas con la reproducción.", color = Color.Gray, modifier = Modifier.padding(top = 16.dp))
+            "Reproductor" -> Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("Letras", "Audio").forEach { tab ->
+                        val active = playerPanelTab == tab
+                        TextButton(onClick = { playerPanelTab = tab }, modifier = Modifier.weight(1f)) {
+                            Text(if (tab == "Letras") "♫  Letras" else "♫  Audio", color = if (active) Color.White else Color.Gray, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                if (playerPanelTab == "Audio") {
+                    AudioEffectsScreen(audioSessionId, Modifier.weight(1f))
                 } else {
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
-                        items(lyrics.size) { index ->
-                            Text(lyrics[index].text, color = if (index == lyricIndex) Pink else Color.LightGray, fontSize = if (index == lyricIndex) 22.sp else 17.sp, fontWeight = if (index == lyricIndex) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Button(onClick = { lyricPicker.launch(arrayOf("text/plain", "application/octet-stream")) }) { Text("Abrir archivo .LRC") }
+                        if (lyrics.isEmpty()) {
+                            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text("Carga un archivo LRC para sincronizar las letras con la canción.", color = Color.Gray)
+                            }
+                        } else {
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 12.dp)) {
+                                items(lyrics.size) { index ->
+                                    Text(lyrics[index].text, color = if (index == lyricIndex) Pink else Color.LightGray, fontSize = if (index == lyricIndex) 22.sp else 17.sp, fontWeight = if (index == lyricIndex) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
+                                }
+                            }
                         }
                     }
                 }
@@ -433,7 +453,7 @@ private fun HomeScreen() {
                                 scope.launch {
                                     try {
                                         val stream = previewStreams[track.id] ?: getAudioStream(track)
-                                        player.setMediaItem(MediaItem.fromUri(stream))
+                                        player.setMediaItem(MediaItem.Builder().setUri(stream).setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.channel).apply { if (track.thumbnail.startsWith("https://")) setArtworkUri(Uri.parse(track.thumbnail)) }.build()).build())
                                         player.prepare()
                                         player.playWhenReady = true
                                         audioSessionId = player.audioSessionId
@@ -463,7 +483,7 @@ private fun HomeScreen() {
                 Modifier.fillMaxWidth().background(Panel).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(track.thumbnail, null, modifier = Modifier.size(48.dp))
+                AsyncImage(track.thumbnail, null, modifier = Modifier.size(48.dp).background(Color.DarkGray, RoundedCornerShape(8.dp)))
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(track.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(track.channel, color = Color.Gray, fontSize = 12.sp)
@@ -475,11 +495,12 @@ private fun HomeScreen() {
             }
         }
         NavigationBar(containerColor = Panel) {
-            listOf("Inicio", "Para ti", "Biblioteca", "Audio", "Letras", "Descargas").forEachIndexed { index, label ->
+            listOf("Inicio", "Para ti", "Biblioteca", "Reproductor", "Descargas").forEachIndexed { index, label ->
                 NavigationBarItem(
                     selected = selected == label, onClick = { selected = label },
-                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.Explore, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Lyrics, Icons.Default.Download)[index], null) },
-                    label = { Text(label) }
+                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.Explore, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Download)[index], null) },
+                    label = { Text(label, maxLines = 1, fontSize = 10.sp) },
+                    alwaysShowLabel = false
                 )
             }
         }
