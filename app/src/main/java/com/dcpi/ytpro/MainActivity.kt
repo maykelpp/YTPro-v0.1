@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -269,6 +270,10 @@ private fun HomeScreen() {
     var current by remember { mutableStateOf<Track?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var audioSessionId by remember { mutableIntStateOf(0) }
+    var playbackProgress by remember { mutableFloatStateOf(0f) }
+    var playbackDuration by remember { mutableLongStateOf(0L) }
+    var shuffleEnabled by remember { mutableStateOf(false) }
+    var repeatEnabled by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Busca música o pega un enlace de contenido que tengas permiso de guardar.") }
     var selected by remember { mutableStateOf("Inicio") }
@@ -283,6 +288,15 @@ private fun HomeScreen() {
             message = if (lyrics.isEmpty()) "El archivo no contiene letras LRC válidas." else "Letras cargadas: " + lyrics.size + " líneas."
         }
     }
+    LaunchedEffect(player, current, isPlaying) {
+        while (true) {
+            val duration = player.duration.takeIf { it > 0L } ?: 0L
+            playbackDuration = duration
+            playbackProgress = if (duration > 0L) (player.currentPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            delay(400L)
+        }
+    }
+
     LaunchedEffect(player, current, isPlaying, selected, playerPanelTab, lyrics) {
         while (isPlaying && selected == "Reproductor" && playerPanelTab == "Letras") {
             lyricIndex = LrcParser.activeIndex(lyrics, player.currentPosition)
@@ -393,7 +407,36 @@ private fun HomeScreen() {
                         .onFailure { message = "No se pudo reproducir el archivo: ${it.message ?: "error de audio"}" }
                 }
             }
-            "Reproductor" -> Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+            "Reproductor" -> Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp)) {
+                if (current == null) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Album, null, tint = Pink, modifier = Modifier.size(76.dp))
+                            Text("Nada se está reproduciendo", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("Elige una canción en Resultados o Biblioteca.", color = Color.Gray)
+                        }
+                    }
+                } else {
+                    AsyncImage(current!!.thumbnail, null, modifier = Modifier.fillMaxWidth().height(190.dp).background(Panel, RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop)
+                    Spacer(Modifier.height(12.dp))
+                    Text(current!!.title, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(current!!.channel, color = Color.Gray, fontSize = 14.sp)
+                    Slider(value = playbackProgress, onValueChange = { playbackProgress = it }, onValueChangeFinished = { if (playbackDuration > 0L) player.seekTo((playbackProgress * playbackDuration).toLong()) }, modifier = Modifier.fillMaxWidth())
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(formatDuration(player.currentPosition / 1000L), color = Color.Gray, fontSize = 11.sp)
+                        Text(formatDuration(playbackDuration / 1000L), color = Color.Gray, fontSize = 11.sp)
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                        IconButton(onClick = { shuffleEnabled = !shuffleEnabled; player.shuffleModeEnabled = shuffleEnabled }) { Icon(Icons.Default.Shuffle, null, tint = if (shuffleEnabled) Pink else Color.Gray) }
+                        IconButton(onClick = { player.seekToPreviousMediaItem() }, enabled = player.hasPreviousMediaItem()) { Icon(Icons.Default.SkipPrevious, null, tint = Color.White) }
+                        FilledIconButton(onClick = { if (player.isPlaying) { player.pause(); isPlaying = false } else { player.play(); isPlaying = true } }, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Pink)) {
+                            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp))
+                        }
+                        IconButton(onClick = { player.seekToNextMediaItem() }, enabled = player.hasNextMediaItem()) { Icon(Icons.Default.SkipNext, null, tint = Color.White) }
+                        IconButton(onClick = { repeatEnabled = !repeatEnabled; player.repeatMode = if (repeatEnabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF }) { Icon(Icons.Default.Repeat, null, tint = if (repeatEnabled) Pink else Color.Gray) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf("Letras", "Audio").forEach { tab ->
                         val active = playerPanelTab == tab
@@ -402,20 +445,22 @@ private fun HomeScreen() {
                         }
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 if (playerPanelTab == "Audio") {
                     AudioEffectsScreen(audioSessionId, Modifier.weight(1f))
                 } else {
                     Column(Modifier.weight(1f)) {
-                        Button(onClick = { lyricPicker.launch(arrayOf("text/plain", "application/octet-stream")) }) { Text("Abrir archivo .LRC") }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { lyricPicker.launch(arrayOf("text/plain", "application/octet-stream")) }) { Text("Abrir .LRC") }
+                        }
                         if (lyrics.isEmpty()) {
                             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("Carga un archivo LRC para sincronizar las letras con la canción.", color = Color.Gray)
+                                Text("Carga un archivo LRC para sincronizar las letras.", color = Color.Gray)
                             }
                         } else {
-                            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 12.dp)) {
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
                                 items(lyrics.size) { index ->
-                                    Text(lyrics[index].text, color = if (index == lyricIndex) Pink else Color.LightGray, fontSize = if (index == lyricIndex) 22.sp else 17.sp, fontWeight = if (index == lyricIndex) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
+                                    Text(lyrics[index].text, color = if (index == lyricIndex) Pink else Color.LightGray, fontSize = if (index == lyricIndex) 21.sp else 16.sp, fontWeight = if (index == lyricIndex) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
                                 }
                             }
                         }
@@ -478,7 +523,7 @@ private fun HomeScreen() {
             }
             else -> Unit
         }
-        current?.let { track ->
+        current?.takeIf { selected != "Reproductor" }?.let { track ->
             Row(
                 Modifier.fillMaxWidth().background(Panel).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
