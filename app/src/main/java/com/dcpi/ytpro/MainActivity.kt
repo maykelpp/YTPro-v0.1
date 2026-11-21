@@ -41,6 +41,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.ffmpeg.FFmpeg
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -244,6 +245,7 @@ private fun HomeScreen() {
     val player = remember { ExoPlayer.Builder(context).build() }
     var query by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var previewStreams by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var current by remember { mutableStateOf<Track?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var audioSessionId by remember { mutableIntStateOf(0) }
@@ -278,7 +280,21 @@ private fun HomeScreen() {
                     busy = true
                     message = "Buscando con yt-dlp…"
                     scope.launch {
-                        try { tracks = searchTracks(query.trim()); message = if (tracks.isEmpty()) "No se encontraron resultados." else "${tracks.size} resultados" }
+                        try {
+                            val found = searchTracks(query.trim())
+                            tracks = found
+                            previewStreams = emptyMap()
+                            message = if (found.isEmpty()) "No se encontraron resultados." else "${found.size} resultados · preparando vistas previas"
+                            // Preparar enlaces en segundo plano para acelerar el toque en Escuchar.
+                            scope.launch {
+                                found.take(8).forEach { candidate ->
+                                    if (previewStreams[candidate.id] == null) {
+                                        val resolved = runCatching { getAudioStream(candidate) }.getOrNull()
+                                        if (resolved != null) previewStreams = previewStreams + (candidate.id to resolved)
+                                    }
+                                }
+                            }
+                        }
                         catch (e: Exception) { message = "Error de búsqueda: ${e.message ?: "inténtalo de nuevo"}" }
                         finally { busy = false }
                     }
@@ -319,7 +335,7 @@ private fun HomeScreen() {
                             message = "Preparando vista previa…"
                             scope.launch {
                                 try {
-                                    val stream = getAudioStream(track)
+                                    val stream = previewStreams[track.id] ?: withTimeout(2000L) { getAudioStream(track) }
                                     player.setMediaItem(MediaItem.fromUri(stream))
                                     player.prepare()
                                     player.play()
