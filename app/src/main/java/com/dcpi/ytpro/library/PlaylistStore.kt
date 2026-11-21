@@ -16,7 +16,7 @@ class PlaylistStore(context: Context) {
                 val item = array.optJSONObject(i) ?: continue
                 val tracks = item.optJSONArray("tracks") ?: JSONArray()
                 add(UserPlaylist(item.optString("id"), item.optString("name"), buildList {
-                    for (j in 0 until tracks.length()) tracks.optString(j).takeIf(String::isNotBlank)?.let(::add)
+                    for (j in 0 until tracks.length()) {\n                        val uri = tracks.optString(j)\n                        if (uri.isNotBlank()) add(uri)\n                    }
                 }))
             }
         }
