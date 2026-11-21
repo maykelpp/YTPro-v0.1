@@ -47,6 +47,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import com.dcpi.ytpro.library.LocalTrack
 
 private val Ink = Color(0xFF09090D)
 private val Panel = Color(0xFF17171F)
@@ -245,6 +246,7 @@ private fun HomeScreen() {
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var current by remember { mutableStateOf<Track?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
+    var audioSessionId by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Busca música o pega un enlace de contenido que tengas permiso de guardar.") }
     var selected by remember { mutableStateOf("Inicio") }
@@ -288,38 +290,59 @@ private fun HomeScreen() {
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), color = Pink, strokeWidth = 2.dp)
         }
         Text(message, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-        LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-            items(tracks, key = { it.id }) { track ->
-                TrackRow(
-                    track = track,
-                    onPreview = {
-                        if (busy) return@TrackRow
-                        busy = true
-                        message = "Preparando vista previa…"
-                        scope.launch {
-                            try {
-                                val stream = getAudioStream(track)
-                                player.setMediaItem(MediaItem.fromUri(stream))
-                                player.prepare()
-                                player.play()
-                                current = track
-                                isPlaying = true
-                                message = "Reproduciendo vista previa"
-                            } catch (e: Exception) { message = "No se pudo reproducir: ${e.message ?: "flujo no disponible"}" }
-                            finally { busy = false }
-                        }
-                    },
-                    onDownload = {
-                        if (busy) return@TrackRow
-                        busy = true
-                        message = "Descargando audio a Música/YTPro…"
-                        scope.launch {
-                            try { downloadAudio(context, track); message = "Descarga completada en Música/YTPro." }
-                            catch (e: Exception) { message = "Error de descarga: ${e.message ?: "inténtalo de nuevo"}" }
-                            finally { busy = false }
-                        }
-                    }
+        when (selected) {
+            "Biblioteca" -> LocalLibraryScreen { localTrack ->
+                val item = Track(
+                    id = localTrack.uri,
+                    title = localTrack.title,
+                    channel = localTrack.artist,
+                    thumbnail = "",
+                    duration = localTrack.durationMs / 1000L,
+                    url = localTrack.uri
                 )
+                player.setMediaItem(MediaItem.fromUri(localTrack.uri))
+                player.prepare()
+                player.play()
+                audioSessionId = player.audioSessionId
+                current = item
+                isPlaying = true
+                message = "Reproduciendo desde la biblioteca local"
+            }
+            "Audio" -> AudioEffectsScreen(audioSessionId)
+            else -> LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                items(tracks, key = { it.id }) { track ->
+                    TrackRow(
+                        track = track,
+                        onPreview = {
+                            if (busy) return@TrackRow
+                            busy = true
+                            message = "Preparando vista previa…"
+                            scope.launch {
+                                try {
+                                    val stream = getAudioStream(track)
+                                    player.setMediaItem(MediaItem.fromUri(stream))
+                                    player.prepare()
+                                    player.play()
+                                    audioSessionId = player.audioSessionId
+                                    current = track
+                                    isPlaying = true
+                                    message = "Reproduciendo vista previa"
+                                } catch (e: Exception) { message = "No se pudo reproducir: ${e.message ?: "flujo no disponible"}" }
+                                finally { busy = false }
+                            }
+                        },
+                        onDownload = {
+                            if (busy) return@TrackRow
+                            busy = true
+                            message = "Descargando audio a Música/YTPro…"
+                            scope.launch {
+                                try { downloadAudio(context, track); message = "Descarga completada en Música/YTPro." }
+                                catch (e: Exception) { message = "Error de descarga: ${e.message ?: "inténtalo de nuevo"}" }
+                                finally { busy = false }
+                            }
+                        }
+                    )
+                }
             }
         }
         current?.let { track ->
@@ -339,10 +362,10 @@ private fun HomeScreen() {
             }
         }
         NavigationBar(containerColor = Panel) {
-            listOf("Inicio", "Explorar", "Biblioteca").forEachIndexed { index, label ->
+            listOf("Inicio", "Biblioteca", "Audio").forEachIndexed { index, label ->
                 NavigationBarItem(
                     selected = selected == label, onClick = { selected = label },
-                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.Explore, Icons.Default.LibraryMusic)[index], null) },
+                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq)[index], null) },
                     label = { Text(label) }
                 )
             }
