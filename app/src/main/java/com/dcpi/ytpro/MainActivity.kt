@@ -9,6 +9,8 @@ import android.os.Environment
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -51,6 +53,9 @@ import java.util.Locale
 import com.dcpi.ytpro.library.LocalTrack
 import com.dcpi.ytpro.downloads.DownloadQueueManager
 import com.dcpi.ytpro.downloads.DownloadStatus
+import com.dcpi.ytpro.playback.LrcParser
+import com.dcpi.ytpro.playback.LyricLine
+import kotlinx.coroutines.delay
 
 private val Ink = Color(0xFF09090D)
 private val Panel = Color(0xFF17171F)
@@ -256,6 +261,22 @@ private fun HomeScreen() {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Busca música o pega un enlace de contenido que tengas permiso de guardar.") }
     var selected by remember { mutableStateOf("Inicio") }
+    var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    var lyricIndex by remember { mutableIntStateOf(-1) }
+    val lyricPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val source = runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty() }.getOrDefault("")
+            lyrics = LrcParser.parse(source)
+            lyricIndex = -1
+            message = if (lyrics.isEmpty()) "El archivo no contiene letras LRC válidas." else "Letras cargadas: " + lyrics.size + " líneas."
+        }
+    }
+    LaunchedEffect(player, current, isPlaying, selected, lyrics) {
+        while (isPlaying && selected == "Letras") {
+            lyricIndex = LrcParser.activeIndex(lyrics, player.currentPosition)
+            delay(150L)
+        }
+    }
 
     DisposableEffect(player) { onDispose { player.release() } }
 
@@ -329,6 +350,18 @@ private fun HomeScreen() {
                 message = "Reproduciendo desde la biblioteca local"
             }
             "Audio" -> AudioEffectsScreen(audioSessionId)
+            "Letras" -> Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
+                Button(onClick = { lyricPicker.launch(arrayOf("text/plain", "application/octet-stream")) }) { Text("Abrir archivo .LRC") }
+                if (lyrics.isEmpty()) {
+                    Text("Carga un archivo LRC para ver las letras sincronizadas con la reproducción.", color = Color.Gray, modifier = Modifier.padding(top = 16.dp))
+                } else {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
+                        items(lyrics.size) { index ->
+                            Text(lyrics[index].text, color = if (index == lyricIndex) Pink else Color.LightGray, fontSize = if (index == lyricIndex) 22.sp else 17.sp, fontWeight = if (index == lyricIndex) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
+                        }
+                    }
+                }
+            }
             "Descargas" -> LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                 item { Text("Cola de descargas", color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(12.dp)) }
                 items(downloadTasks, key = { it.id }) { task ->
@@ -384,10 +417,10 @@ private fun HomeScreen() {
             }
         }
         NavigationBar(containerColor = Panel) {
-            listOf("Inicio", "Biblioteca", "Audio", "Descargas").forEachIndexed { index, label ->
+            listOf("Inicio", "Biblioteca", "Audio", "Letras", "Descargas").forEachIndexed { index, label ->
                 NavigationBarItem(
                     selected = selected == label, onClick = { selected = label },
-                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Download)[index], null) },
+                    icon = { Icon(listOf(Icons.Default.Home, Icons.Default.LibraryMusic, Icons.Default.GraphicEq, Icons.Default.Lyrics, Icons.Default.Download)[index], null) },
                     label = { Text(label) }
                 )
             }
