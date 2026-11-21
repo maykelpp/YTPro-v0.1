@@ -16,6 +16,7 @@ data class DownloadTask(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
     val source: String,
+    val contentId: String,
     val status: DownloadStatus = DownloadStatus.QUEUED,
     val message: String = ""
 )
@@ -42,8 +43,8 @@ class DownloadQueueManager(
         }
     }
 
-    fun enqueue(title: String, source: String): String {
-        val task = DownloadTask(title = title, source = source)
+    fun enqueue(title: String, source: String, contentId: String): String {
+        val task = DownloadTask(title = title, source = source, contentId = contentId)
         mutableTasks.value = mutableTasks.value + task
         queue.trySend(task)
         return task.id
