@@ -55,6 +55,7 @@ import com.dcpi.ytpro.downloads.DownloadQueueManager
 import com.dcpi.ytpro.downloads.DownloadStatus
 import com.dcpi.ytpro.playback.LrcParser
 import com.dcpi.ytpro.playback.LyricLine
+import com.dcpi.ytpro.playback.TransitionController
 import kotlinx.coroutines.delay
 
 private val Ink = Color(0xFF09090D)
@@ -142,8 +143,7 @@ private suspend fun searchTracks(query: String, start: Int = 1, pageSize: Int = 
 
 private suspend fun getAudioStream(track: Track): String = withContext(Dispatchers.IO) {
     val request = YoutubeDLRequest(track.url)
-    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
-    request.addOption("-f", "bestaudio/best")
+    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
     request.addOption("--no-warnings")
     request.addOption("--no-update")
     val info = YoutubeDL.getInstance().getInfo(request)
@@ -341,13 +341,16 @@ private fun HomeScreen() {
                     duration = localTrack.durationMs / 1000L,
                     url = localTrack.uri
                 )
-                player.setMediaItem(MediaItem.fromUri(localTrack.uri))
-                player.prepare()
-                player.play()
-                audioSessionId = player.audioSessionId
                 current = item
-                isPlaying = true
-                message = "Reproduciendo desde la biblioteca local"
+                scope.launch {
+                    runCatching { TransitionController(player).playWithFade(localTrack.uri) }
+                        .onSuccess {
+                            audioSessionId = player.audioSessionId
+                            isPlaying = true
+                            message = "Reproduciendo desde la biblioteca local"
+                        }
+                        .onFailure { message = "No se pudo reproducir el archivo: ${it.message ?: "error de audio"}" }
+                }
             }
             "Audio" -> AudioEffectsScreen(audioSessionId)
             "Letras" -> Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
@@ -380,9 +383,7 @@ private fun HomeScreen() {
                             scope.launch {
                                 try {
                                     val stream = previewStreams[track.id] ?: withTimeout(2000L) { getAudioStream(track) }
-                                    player.setMediaItem(MediaItem.fromUri(stream))
-                                    player.prepare()
-                                    player.play()
+                                    TransitionController(player).playWithFade(stream)
                                     audioSessionId = player.audioSessionId
                                     current = track
                                     isPlaying = true
